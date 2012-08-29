@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	android:orientation="vertical"
+	android:descendantFocusability="beforeDescendants"
+	android:focusableInTouchMode="true"
+	android:layout_width="fill_parent"
+	android:layout_height="fill_parent">
+
+	<LinearLayout
+		android:orientation="horizontal"
+		android:layout_width="fill_parent"
+		android:layout_height="wrap_content"
+		android:baselineAligned="false">
+
+		<EditText
+			android:id="@+id/main_endpoint" 
+			android:hint="@string/main_endpoint_hint" 
+			android:singleLine="true"
+			android:maxLines="1"
+			android:layout_width="fill_parent" 
+			android:layout_weight=".1"
+			android:layout_height="wrap_content" 
+			android:layout_marginTop="16dp"
+			android:layout_marginLeft="16dp"
+			android:layout_marginRight="16dp"
+			android:inputType="textUri" />
+
+	</LinearLayout>
+
+	<LinearLayout
+		android:orientation="horizontal"
+		android:layout_width="fill_parent"
+		android:layout_height="wrap_content"
+		android:baselineAligned="false">
+
+		<CheckBox
+			android:id="@+id/main_enabler"
+			android:layout_marginTop="8dp"
+			android:layout_marginBottom="8dp"
+			android:layout_marginLeft="16dp"
+			android:layout_marginRight="16dp"
+			android:layout_width="fill_parent"
+			android:layout_weight=".1"
+			android:layout_height="wrap_content"
+			android:focusableInTouchMode="true"
+			android:text="@string/main_enable_desc" />
+
+		<Spinner
+			android:id="@+id/main_updatefreq"
+			android:layout_gravity="right" 
+			android:layout_width="wrap_content" 
+			android:layout_height="fill_parent" />
+
+	</LinearLayout>
+
+	<ScrollView
+		android:id="@+id/main_log_scroller"
+        android:background="#222222"
+        android:layout_width="fill_parent"
+		android:layout_height="fill_parent">
+
+        <TextView android:id="@+id/main_log"
+			android:focusableInTouchMode="true"
+            android:layout_height="fill_parent"
+			android:layout_width="fill_parent"
+			android:layout_margin="8dp"
+            android:paddingBottom="8dip" />
+
+    </ScrollView>
+
+</LinearLayout>
