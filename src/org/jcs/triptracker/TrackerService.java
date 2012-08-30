@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -25,6 +26,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
 import android.os.Messenger;
+import android.os.PowerManager;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.util.Log;
@@ -39,6 +41,8 @@ import org.apache.http.message.BasicNameValuePair;
 public class TrackerService extends Service {
 	private static final String TAG = "TrackerService";
 
+	public static TrackerService service;
+
 	private NotificationManager nm;
 	private static boolean isRunning = false;
 
@@ -49,6 +53,9 @@ public class TrackerService extends Service {
 	private final int MAX_RING_SIZE = 15;
 	
 	private LocationListener locationListener;
+	private AlarmManager alarmManager;
+	private PendingIntent pendingAlarm;
+	private static volatile PowerManager.WakeLock wakeLock;
 
 	private AsyncTask httpPoster;
 
@@ -71,6 +78,8 @@ public class TrackerService extends Service {
 	@Override
 	public void onCreate() {
 		super.onCreate();
+
+		TrackerService.service = this;
 
 		endpoint = Prefs.getEndpoint(this);
 		freqSeconds = 0;
@@ -105,16 +114,14 @@ public class TrackerService extends Service {
 
 		showNotification();
 
+		isRunning = true;
+
 		/* we're not registered yet, so this will just log to our ring buffer,
 		 * but as soon as the client connects we send the log buffer anyway */
 		logText("service started, requesting location update every " +
 			freqString);
 
-		isRunning = true;
-
-		LocationManager locationManager = (LocationManager)
-			this.getSystemService(Context.LOCATION_SERVICE);
-
+		/* findAndSendLocation() will callback to this */
 		locationListener = new LocationListener() {
 			public void onLocationChanged(Location location) {
 				sendLocation(location);
@@ -131,12 +138,13 @@ public class TrackerService extends Service {
 			}
 		};
 
-		/* use our frequency as a recommendation, but we may not get updates
-		 * every interval.  oh well.  no point in using a timer to force it
-		 * since the location will just be the same. */
-		locationManager.requestLocationUpdates(
-			LocationManager.GPS_PROVIDER, freqSeconds * 1000, 0,
-			locationListener);
+		/* we don't need to be exact in our frequency, try to conserve at least
+		 * a little battery */
+		alarmManager = (AlarmManager)getSystemService(ALARM_SERVICE);
+		Intent i = new Intent(this, AlarmBroadcast.class);
+		pendingAlarm = PendingIntent.getBroadcast(this, 0, i, 0);
+		alarmManager.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+			SystemClock.elapsedRealtime(), freqSeconds * 1000, pendingAlarm);
 	}
 
 	@Override
@@ -146,9 +154,6 @@ public class TrackerService extends Service {
 		if (httpPoster != null)
 			httpPoster.cancel(true);
 
-		/* kill persistent notification */
-		nm.cancelAll();
-
 		try {
 			LocationManager locationManager = (LocationManager)
 				this.getSystemService(Context.LOCATION_SERVICE);
@@ -157,12 +162,43 @@ public class TrackerService extends Service {
 		catch (Exception e) {
 		}
 
+		/* kill persistent notification */
+		nm.cancelAll();
+
+		if (pendingAlarm != null)
+			alarmManager.cancel(pendingAlarm);
+
 		isRunning = false;
 	}
 
 	@Override
 	public int onStartCommand(Intent intent, int flags, int startId) {
 		return START_STICKY;
+	}
+
+	/* called within wake lock from broadcast receiver, but assert that we have
+	 * it so we can keep it longer when we return (since the location request
+	 * uses a callback) and then free it when we're done running through the
+	 * queue */
+	public void findAndSendLocation() {
+		if (wakeLock == null) {
+			PowerManager pm = (PowerManager)this.getSystemService(
+				Context.POWER_SERVICE);
+
+			/* we don't need the screen on */
+			wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
+				"triptracker");
+			wakeLock.setReferenceCounted(true);
+		}
+
+		if (!wakeLock.isHeld())
+			wakeLock.acquire();
+
+		LocationManager locationManager = (LocationManager)
+			this.getSystemService(Context.LOCATION_SERVICE);
+
+		locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER,
+			locationListener, null);
 	}
 
 	public static boolean isRunning() {
@@ -181,7 +217,7 @@ public class TrackerService extends Service {
 		nm.notify(1, notification);
 	}
 
-	private void logText(String log) {
+	public void logText(String log) {
 		LogMessage lm = new LogMessage(new Date(), log);
 		mLogRing.add(lm);
 		if (mLogRing.size() > MAX_RING_SIZE)
@@ -242,7 +278,9 @@ public class TrackerService extends Service {
 		updateLock.writeLock().unlock();
 
 		if (pokePoster)
-			(httpPoster = new HttpPoster()).execute(TrackerService.this);
+			(httpPoster = new HttpPoster()).execute();
+
+		/* otherwise, the queue is already being run through */
 	}
 
 	class IncomingHandler extends Handler {
@@ -272,10 +310,16 @@ public class TrackerService extends Service {
 		}
 	}
 
+	/* Void as first arg causes a crash, no idea why
+	E/AndroidRuntime(17157): Caused by: java.lang.ClassCastException: java.lang.Object[] cannot be cast to java.lang.Void[]
+	*/
 	class HttpPoster extends AsyncTask<Object, Void, Boolean> {
 		@Override
-		protected Boolean doInBackground(Object... t) {
-			TrackerService service = (TrackerService)t[0];
+		protected Boolean doInBackground(Object... o) {
+			TrackerService service = TrackerService.service;
+
+			int retried = 0;
+			int max_retries = 4;
 
 			while (true) {
 				if (isCancelled())
@@ -317,10 +361,21 @@ public class TrackerService extends Service {
 						httpClient.close();
 				}
 
-				if (failed)
+				if (failed) {
 					/* if our initial request failed, snooze for a bit and try
 					 * again, the server might not be reachable */
 					SystemClock.sleep(15 * 1000);
+
+					if (++retried > max_retries) {
+						/* give up since we're holding the wake lock open for
+						 * too long.  we'll get it next time, champ. */
+						logText("too many failures, retrying later (queue " +
+							"size " + service.getUpdatesSize() + ")");
+						break;
+					}
+				}
+				else
+					retried = 0;
 
 				int q = 0;
 				updateLock.writeLock().lock();
@@ -332,10 +387,12 @@ public class TrackerService extends Service {
 				/* otherwise, run through the rest of the queue */
 			}
 
-			return true;
+			return false;
 		}
 
-		protected void onPostExecute(Void v) {
+		protected void onPostExecute(Boolean b) {
+			if (wakeLock != null)
+				wakeLock.release();
 		}
 	}
 }

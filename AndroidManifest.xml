@@ -31,5 +31,7 @@
 		</activity>
 
 		<service android:name=".TrackerService" />
+
+        <receiver android:name=".AlarmBroadcast" android:enabled="true" />
     </application>
 </manifest> 
