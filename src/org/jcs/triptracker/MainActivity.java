@@ -78,7 +78,7 @@ public class MainActivity extends Activity {
 				/* hide the keyboard */
 				InputMethodManager imm = (InputMethodManager)
 					getSystemService(Activity.INPUT_METHOD_SERVICE);
-				imm.toggleSoftInput(InputMethodManager.HIDE_IMPLICIT_ONLY, 0);
+				imm.hideSoftInputFromWindow(endpoint.getWindowToken(), 0);
 			}
 		});
 
