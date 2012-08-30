@@ -43,7 +43,7 @@ public final class Prefs {
 	}
 
 	public static String getUpdateFreq(final Context context) {
-		return Prefs.getPref(context, UPDATE_FREQ, null);
+		return Prefs.getPref(context, UPDATE_FREQ, "30m");
 	}
 
 	public static void putUpdateFreq(final Context context, String freq) {
