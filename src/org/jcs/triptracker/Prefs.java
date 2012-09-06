@@ -10,6 +10,7 @@ public final class Prefs {
 	private static final String TAG = "Prefs";
 
 	public static String ENDPOINT = "endpoint";
+	public static String ENABLED = "enabled";
 	public static String UPDATE_FREQ = "update_freq";
 	public static String LAST_POST_TIME = "last_post_time";
 
@@ -45,6 +46,11 @@ public final class Prefs {
 	public static String getUpdateFreq(final Context context) {
 		return Prefs.getPref(context, UPDATE_FREQ, "30m");
 	}
+	
+	public static boolean getEnabled(final Context context) {
+		String e = Prefs.getPref(context, ENABLED, "false");
+		return e.equals("true");
+	}
 
 	public static void putUpdateFreq(final Context context, String freq) {
 		Prefs.putPref(context, UPDATE_FREQ, freq);
@@ -52,5 +58,9 @@ public final class Prefs {
 
 	public static void putEndpoint(final Context context, String endpoint) {
 		Prefs.putPref(context, ENDPOINT, endpoint);
+	}
+	
+	public static void putEnabled(final Context context, boolean enabled) {
+		Prefs.putPref(context, ENABLED, (enabled ? "true" : "false"));
 	}
 }

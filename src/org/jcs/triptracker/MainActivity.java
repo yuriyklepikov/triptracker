@@ -37,7 +37,7 @@ import java.util.ArrayList;
 import java.util.Date;
 
 public class MainActivity extends Activity {
-	private static final String TAG = "MainActivity";
+	private static final String TAG = "TripTracker/Main";
 
 	Messenger mService = null;
 	boolean mIsBound;
@@ -143,6 +143,8 @@ public class MainActivity extends Activity {
 						TrackerService.class));
 					doUnbindService();
 				}
+
+				Prefs.putEnabled(MainActivity.this, enabler.isChecked());
 			}
 		});
 
@@ -152,6 +154,8 @@ public class MainActivity extends Activity {
 			enabler.setChecked(true);
 			doBindService();
 		}
+		else if (Prefs.getEnabled(this))
+			enabler.performClick();
 	}
 
 	@Override

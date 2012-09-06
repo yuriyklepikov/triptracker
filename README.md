@@ -4,9 +4,9 @@ This is an Android app I threw together in a few hours to do periodic GPS locati
 
 Enter a URL that accepts POST requests, choose a poll interval, and tap "Enable Tracking".  The Android location manager will return a GPS location every so often around that interval (it is not exact) and the information will be POSTed to your URL.
 
-The POSTed parameters are `time` (a Unix Timestamp from the Location service), `latitude` and `longitude` (two float values of arbitrary precision), and `speed` in meters per second.
+The POSTed parameters are a `locations` array, each element being a hash including `time` (a Unix Timestamp from the Location service), `latitude` and `longitude` (two float values of arbitrary precision), and `speed` in meters per second.
 
-There is some error handling for when you travel out of reach of data service or the server is not responding properly.  Location points are stored in a queue and retried in order until they are received by the server with a 200 HTTP status.
+There is some error handling for when you travel out of reach of data service or the server is not responding properly.  Location points are stored in a queue and retried until they are received by the server with a 200 HTTP status.
 
 ####Disclaimer
 

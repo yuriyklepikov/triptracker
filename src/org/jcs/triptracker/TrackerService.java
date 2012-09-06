@@ -1,14 +1,21 @@
 package org.jcs.triptracker;
 
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.InputStreamReader;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.List;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import android.app.Activity;
 import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationManager;
@@ -37,13 +44,17 @@ import org.apache.http.client.ClientProtocolException;
 import org.apache.http.HttpResponse;
 import org.apache.http.NameValuePair;
 import org.apache.http.message.BasicNameValuePair;
+import org.json.*;
 
 public class TrackerService extends Service {
-	private static final String TAG = "TrackerService";
+	private static final String TAG = "TripTracker/Service";
+
+	private final String updatesCache = "updates.cache";
 
 	public static TrackerService service;
 
 	private NotificationManager nm;
+	private Notification notification;
 	private static boolean isRunning = false;
 
 	private String freqString;
@@ -112,6 +123,8 @@ public class TrackerService extends Service {
 			stopSelf();
 		}
 
+		readCache();
+
 		showNotification();
 
 		isRunning = true;
@@ -176,6 +189,114 @@ public class TrackerService extends Service {
 		return START_STICKY;
 	}
 
+	/* must be done inside of updateLock */
+	public void cacheUpdates() {
+		OutputStreamWriter cacheStream = null;
+
+		try {
+			FileOutputStream cacheFile = TrackerService.this.openFileOutput(
+				updatesCache, Activity.MODE_PRIVATE);
+			cacheStream = new OutputStreamWriter(cacheFile, "UTF-8");
+
+			/* would be nice to just serialize mUpdates but it's not
+			 * serializable.  create a json array of json objects, each object
+			 * having each key/value pair of one location update. */
+
+			JSONArray ja = new JSONArray();
+
+			for (int i = 0; i < mUpdates.size(); i++) {
+				List<NameValuePair> pair = mUpdates.get(i);
+				JSONObject jo = new JSONObject();
+
+				for (int j = 0; j < pair.size(); j++) {
+					try {
+						jo.put(((NameValuePair)pair.get(j)).getName(),
+							pair.get(j).getValue());
+					}
+					catch (JSONException e) {
+					}
+				}
+
+				ja.put(jo);
+			}
+
+			cacheStream.write(ja.toString());
+			cacheFile.getFD().sync();
+		}
+		catch (IOException e) {
+			Log.w(TAG, e);
+		}
+		finally {
+			if (cacheStream != null) {
+				try {
+					cacheStream.close();
+				}
+				catch (IOException e) {
+				}
+			}
+		}
+	}
+
+	/* read json cache into mUpdates */
+	public void readCache() {
+		updateLock.writeLock().lock();
+
+		InputStreamReader cacheStream = null;
+
+		try {
+			FileInputStream cacheFile = TrackerService.this.openFileInput(
+				updatesCache);
+			StringBuffer buf = new StringBuffer("");
+			byte[] bbuf = new byte[1024];
+			int len;
+
+			while ((len = cacheFile.read(bbuf)) != -1)
+				buf.append(new String(bbuf));
+
+			JSONArray ja = new JSONArray(new String(buf));
+
+			mUpdates = new ArrayList<List>();
+
+			for (int j = 0; j < ja.length(); j++) {
+				JSONObject jo = ja.getJSONObject(j);
+					
+				List<NameValuePair> nvp = new ArrayList<NameValuePair>(2);
+
+				Iterator<String> i = jo.keys();
+				while (i.hasNext()) {
+					String k = (String)i.next();
+					String v = jo.getString(k);
+
+					nvp.add(new BasicNameValuePair(k, v));
+				}
+
+				mUpdates.add(nvp);
+			}
+
+			if (mUpdates.size() > 0)
+				logText("read " + mUpdates.size() + " update" +
+					(mUpdates.size() == 1 ? "" : "s") + " from cache");
+		}
+		catch (JSONException e) {
+		}
+		catch (FileNotFoundException e) {
+		}
+		catch (IOException e) {
+			Log.w(TAG, e);
+		}
+		finally {
+			if (cacheStream != null) {
+				try {
+					cacheStream.close();
+				}
+				catch (IOException e) {
+				}
+			}
+		}
+
+		updateLock.writeLock().unlock();
+	}
+
 	/* called within wake lock from broadcast receiver, but assert that we have
 	 * it so we can keep it longer when we return (since the location request
 	 * uses a callback) and then free it when we're done running through the
@@ -207,7 +328,7 @@ public class TrackerService extends Service {
 
 	private void showNotification() {
 		nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
-		Notification notification = new Notification(R.drawable.icon,
+		notification = new Notification(R.drawable.icon,
 			"Trip Tracker Started", System.currentTimeMillis());
 		PendingIntent contentIntent = PendingIntent.getActivity(this, 0,
 			new Intent(this, MainActivity.class), 0);
@@ -217,11 +338,24 @@ public class TrackerService extends Service {
 		nm.notify(1, notification);
 	}
 
+	private void updateNotification(String text) {
+		if (nm != null) {
+			PendingIntent contentIntent = PendingIntent.getActivity(this, 0,
+				new Intent(this, MainActivity.class), 0);
+			notification.setLatestEventInfo(this, "Trip Tracker", text,
+				contentIntent);
+			notification.when = System.currentTimeMillis();
+			nm.notify(1, notification);
+		}
+	}
+
 	public void logText(String log) {
 		LogMessage lm = new LogMessage(new Date(), log);
 		mLogRing.add(lm);
 		if (mLogRing.size() > MAX_RING_SIZE)
 			mLogRing.remove(0);
+	
+		updateNotification(log);
 
 		for (int i = mClients.size() - 1; i >= 0; i--) {
 			try {
@@ -238,8 +372,21 @@ public class TrackerService extends Service {
 		}
 	}
 
-	public List<NameValuePair> getUpdate(int i) {
-		return mUpdates.get(i);
+	/* flatten an array of NameValuePairs into an array of
+	 * locations[0]latitude, locations[1]latitude, etc. */
+	public List<NameValuePair> getUpdatesAsArray() {
+		List<NameValuePair> pairs = new ArrayList<NameValuePair>(2);
+
+		for (int i = 0; i < mUpdates.size(); i++) {
+			List<NameValuePair> pair = mUpdates.get(i);
+
+			for (int j = 0; j < pair.size(); j++)
+				pairs.add(new BasicNameValuePair("locations[" + i + "]" +
+					((NameValuePair)pair.get(j)).getName(),
+					pair.get(j).getValue()));
+		}
+
+		return pairs;
 	}
 	
 	public int getUpdatesSize() {
@@ -261,26 +408,24 @@ public class TrackerService extends Service {
 		pairs.add(new BasicNameValuePair("speed",
 			String.valueOf(location.getSpeed())));
 
-		logText("location " +
-			(new DecimalFormat("#.######").format(location.getLatitude())) +
-			", " +
-			(new DecimalFormat("#.######").format(location.getLongitude())));
-
 		/* push these pairs onto the queue, and only run the poster if another
 		 * one isn't running already (if it is, it will keep running through
 		 * the queue until it's empty) */
-		boolean pokePoster = false;
-
 		updateLock.writeLock().lock();
 		mUpdates.add(pairs);
-		if (mUpdates.size() == 1)
-			pokePoster = true;
+		int size = service.getUpdatesSize();
+		cacheUpdates();
 		updateLock.writeLock().unlock();
 
-		if (pokePoster)
-			(httpPoster = new HttpPoster()).execute();
+		logText("location " +
+			(new DecimalFormat("#.######").format(location.getLatitude())) +
+			", " +
+			(new DecimalFormat("#.######").format(location.getLongitude())) +
+			(size <= 1 ? "" : " (" + size + " queued)"));
 
-		/* otherwise, the queue is already being run through */
+		if (httpPoster == null ||
+		httpPoster.getStatus() == AsyncTask.Status.FINISHED)
+			(httpPoster = new HttpPoster()).execute();
 	}
 
 	class IncomingHandler extends Handler {
@@ -328,7 +473,8 @@ public class TrackerService extends Service {
 				boolean failed = false;
 
 				updateLock.writeLock().lock();
-				List<NameValuePair> pairs = service.getUpdate(0);
+				List<NameValuePair> pairs = service.getUpdatesAsArray();
+				int pairSize = service.getUpdatesSize();
 				updateLock.writeLock().unlock();
 
 				AndroidHttpClient httpClient =
@@ -341,9 +487,12 @@ public class TrackerService extends Service {
 
 					int httpStatus = resp.getStatusLine().getStatusCode();
 					if (httpStatus == 200) {
-						/* all good, we can remove this from the queue */
+						/* all good, we can remove everything we've sent from
+						 * the queue (but not just clear it, in case another
+						 * one jumped onto the end while we were here) */
 						updateLock.writeLock().lock();
-						service.removeUpdate(0);
+						for (int i = pairSize - 1; i >= 0; i--)
+							service.removeUpdate(i);
 						updateLock.writeLock().unlock();
 					}
 					else {
@@ -352,8 +501,9 @@ public class TrackerService extends Service {
 						failed = true;
 					}
 				}
-				catch (Throwable th) {
-					logText("POST failed to " + endpoint + ": " + th);
+				catch (Exception e) {
+					logText("POST failed to " + endpoint + ": " + e);
+					Log.w(TAG, e);
 					failed = true;
 				}
 				finally {
@@ -380,6 +530,7 @@ public class TrackerService extends Service {
 				int q = 0;
 				updateLock.writeLock().lock();
 				q = service.getUpdatesSize();
+				cacheUpdates();
 				updateLock.writeLock().unlock();
 
 				if (q == 0)
@@ -391,7 +542,7 @@ public class TrackerService extends Service {
 		}
 
 		protected void onPostExecute(Boolean b) {
-			if (wakeLock != null)
+			if (wakeLock != null && wakeLock.isHeld())
 				wakeLock.release();
 		}
 	}
