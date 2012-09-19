@@ -381,8 +381,8 @@ public class TrackerService extends Service {
 			List<NameValuePair> pair = mUpdates.get(i);
 
 			for (int j = 0; j < pair.size(); j++)
-				pairs.add(new BasicNameValuePair("locations[" + i + "]" +
-					((NameValuePair)pair.get(j)).getName(),
+				pairs.add(new BasicNameValuePair("locations[" + i + "][" +
+					((NameValuePair)pair.get(j)).getName() + "]",
 					pair.get(j).getValue()));
 		}
 
